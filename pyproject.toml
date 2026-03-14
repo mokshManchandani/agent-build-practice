@@ -1,0 +1,10 @@
+[project]
+name = "insurance-agent"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.135.1",
+    "google-adk>=1.27.1",
+    "python-dotenv>=1.2.2",
+    "uvicorn[standard]>=0.41.0",
+]
