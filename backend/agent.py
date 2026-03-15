@@ -12,29 +12,59 @@ load_dotenv()
 session_service = InMemorySessionService()
 
 # ── Agent definition ───────────────────────────────────────────────────────
-root_agent = LlmAgent(
-    name="claims_triage_agent",
+
+# ── Policy agent ───────────────────────────────────────────────────────────
+policy_agent = LlmAgent(
+    name="policy_agent",
     model="gemini-2.0-flash",
     description=(
-        "Handles insurance policy lookups, claim status checks, "
-        "and payout estimates for auto, home, and health policies."
+        "Handles policy lookups. Use this when the user asks about "
+        "their policy details, coverage limits, or premium amount."
     ),
     instruction="""
-    You are an insruance claims triage assistant.
-    You help policyholders with three things:
-        1. Looking up policy details
-        2. Checking the status of an exisisting claim
-        3. Estimating a payout before filing
-    Rules:
-        - Always use the provided tools - never invent policy or claim data.
-        - If the user needs to give you an policy number or claim ID and hasn't
-        ask for it before calling any tool.
-        - keep answers concise: lead with the direct answer then details.
-        - If a claim status is 'rejected', acknolwedge it and refer the user to appeals@insurance.com for next steps
-        - If the question is outside insurance, polietly say it is out of scope.
-    """,
-    tools=[get_policy_details, get_claim_status, calculate_payout_estimate],
-    # output_key='traige_response'
+You are a policy lookup specialist.
+Use get_policy_details to retrieve policy information.
+Always ask for the policy number if the user hasn't provided one.
+Keep answers factual and concise.
+""",
+    tools=[get_policy_details],
+    output_key="policy_result",
+)
+
+# ── Claims agent ───────────────────────────────────────────────────────────
+claims_agent = LlmAgent(
+    name="claims_agent",
+    model="gemini-2.0-flash",
+    description=(
+        "Handles claim status checks and payout estimates. Use this when "
+        "the user asks about an existing claim or wants to estimate a payout."
+    ),
+    instruction="""
+You are a claims processing specialist.
+Use get_claim_status to check existing claims.
+Use calculate_payout_estimate when the user wants to know their payout.
+Always ask for claim ID or damage details if not provided.
+If a claim is rejected, refer the user to appeals@insurance.com.
+""",
+    tools=[get_claim_status, calculate_payout_estimate],
+    output_key="claims_result",
+)
+
+# ── Coordinator ────────────────────────────────────────────────────────────
+root_agent = LlmAgent(
+    name="coordinator",
+    model="gemini-2.0-flash",
+    description="Routes insurance queries to the right specialist agent.",
+    instruction="""
+You are an insurance assistant coordinator.
+Route every request to the correct specialist:
+- Policy questions → policy_agent
+- Claims or payout questions → claims_agent
+
+Do not answer questions directly. Always delegate to a specialist.
+If a question is outside insurance entirely, respond directly yourself — do not transfer to any specialist. Say: "That is outside the scope of insurance inquiries."
+""",
+    sub_agents=[policy_agent, claims_agent],
 )
 # ── Runner (singleton) ─────────────────────────────────────────────────────
 runner = Runner(
