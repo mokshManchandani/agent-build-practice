@@ -2,15 +2,12 @@ import os
 from dotenv import load_dotenv
 
 from google.adk.agents import LlmAgent, SequentialAgent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 
 from .tools import get_policy_details, get_claim_status, calculate_payout_estimate
-from .tools.confirmation import approve_payout_tool
+from .tools.clarification import request_clarification
+from .observability import after_agent_callback, after_model_callback
 
 load_dotenv()
-# ── Session service (singleton) ────────────────────────────────────────────
-session_service = InMemorySessionService()
 
 # ── Agent definition ───────────────────────────────────────────────────────
 
@@ -30,6 +27,8 @@ Keep answers factual and concise.
 """,
     tools=[get_policy_details],
     output_key="policy_result",
+    after_model_callback=after_model_callback,
+    after_agent_callback=after_agent_callback,
 )
 
 # ── Claims agent ───────────────────────────────────────────────────────────
@@ -45,12 +44,16 @@ claims_agent = LlmAgent(
 You are a claims processing specialist.
 Use get_claim_status to check existing claims.
 Use calculate_payout_estimate when the user wants to know their payout.
-Use approve_payout to process a payout approval when the user explicitly confirms they want to approve a payout. Always confirm the claim_id, amount and reason before calling it.
+When you have enough information to process a payout, call request_clarification
+to get explicit user confirmation. Always confirm the claim_id, amount and reason
+in your question.
 Always ask for claim ID or damage details if not provided.
-If a claim is rejected, refer the user to appeals@insurance.com.
+If a claim is rejected, acknowledge it and refer to appeals@insurance.com.
 """,
-    tools=[get_claim_status, calculate_payout_estimate, approve_payout_tool],
+    tools=[get_claim_status, calculate_payout_estimate, request_clarification],
     output_key="claims_result",
+    after_agent_callback=after_agent_callback,
+    after_model_callback=after_model_callback,
 )
 
 
@@ -77,6 +80,8 @@ Adjuster notes: <value>
 """,
     tools=[get_claim_status],
     output_key="intake_result",
+    after_model_callback=after_model_callback,
+    after_agent_callback=after_agent_callback,
 )
 
 risk_agent = LlmAgent(
@@ -100,6 +105,8 @@ Reason: <one sentence>
 """,
     tools=[],
     output_key="risk_result",
+    after_model_callback=after_model_callback,
+    after_agent_callback=after_agent_callback,
 )
 
 decision_agent = LlmAgent(
@@ -124,6 +131,8 @@ Summary: <two sentences explaining the decision>
 """,
     tools=[],
     output_key="decision_result",
+    after_model_callback=after_model_callback,
+    after_agent_callback=after_agent_callback,
 )
 
 claims_pipeline = SequentialAgent(
@@ -149,9 +158,6 @@ Do not answer questions directly. Always delegate to a specialist.
 If a question is outside insurance entirely, respond directly yourself — do not transfer to any specialist. Say: "That is outside the scope of insurance inquiries."
 """,
     sub_agents=[policy_agent, claims_agent, claims_pipeline],
-)
-
-# ── Runner (singleton) ─────────────────────────────────────────────────────
-runner = Runner(
-    agent=root_agent, app_name="insurance-agent", session_service=session_service
+    after_model_callback=after_model_callback,
+    after_agent_callback=after_agent_callback,
 )
