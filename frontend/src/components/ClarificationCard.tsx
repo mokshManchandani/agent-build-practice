@@ -1,23 +1,22 @@
-import { useState } from 'react'
+import { useState } from "react"
 
 interface Props {
-    question: string
-    onSubmit: (answer: string) => void
-    disabled: boolean
+  question: string
+  onSubmit: (answer: string) => void
+  disabled: boolean
 }
 
+export default function ClarificationCard({ question, onSubmit, disabled }: Props) {
+  const [answer, setAnswer] = useState("")
 
-const ClarificationCard = ({ question, onSubmit, disabled}: Props) => {
-    const [answer, setAnswer] = useState<string>("");
+  const handleSubmit = () => {
+    if (!answer.trim() || disabled) return
+    onSubmit(answer.trim())
+    setAnswer("")
+  }
 
-    const handleSubmit = () => {
-        if(!answer.trim() || disabled) return
-        onSubmit(answer.trim())
-        setAnswer("")
-    }
-
-    return(
-       <div className="border border-blue-200 bg-blue-50 rounded-xl p-4 my-2">
+  return (
+    <div className="border border-blue-200 bg-blue-50 rounded-xl p-4 my-2">
       <p className="text-sm font-medium text-blue-800 mb-3">
         🤔 {question}
       </p>
@@ -39,8 +38,6 @@ const ClarificationCard = ({ question, onSubmit, disabled}: Props) => {
           Send
         </button>
       </div>
-    </div> 
-    )
+    </div>
+  )
 }
-
-export default ClarificationCard;

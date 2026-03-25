@@ -1,13 +1,11 @@
-import type {FunctionCallPart} from '../types'
+import type { FunctionCallPart } from "../types"
 
-
-interface Props{
-    call: FunctionCallPart
+interface Props {
+  call: FunctionCallPart
 }
 
-
-const ToolCallChip = ({call}: Props) => {
-    const args = Object.entries(call.args)
+export default function ToolCallChip({ call }: Props) {
+  const args = Object.entries(call.args)
     .map(([k, v]) => `${k}: ${v}`)
     .join(", ")
 
@@ -23,5 +21,3 @@ const ToolCallChip = ({call}: Props) => {
     </div>
   )
 }
-
-export default ToolCallChip

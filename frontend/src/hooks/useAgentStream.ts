@@ -1,4 +1,3 @@
-// src/hooks/useAgentStream.ts
 import { useState, useRef, useCallback } from "react";
 import type {
   AgentEvent,
@@ -17,6 +16,7 @@ export function useAgentStream() {
     string | null
   >(null);
   const streamingIdRef = useRef<string | null>(null);
+  const prevTotalTokensRef = useRef<number>(0);
 
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) => {
@@ -34,13 +34,23 @@ export function useAgentStream() {
       const agentMsgId = `agent-${Date.now()}`;
       streamingIdRef.current = agentMsgId;
 
-      // Placeholder bubble while streaming
       upsertMessage({
         id: agentMsgId,
         role: "agent",
         text: "",
         isStreaming: true,
       });
+
+      // All accumulators declared ABOVE try so finally can access them
+      let streamingText = "";
+      let author = "";
+      let toolCalls: FunctionCallPart[] = [];
+      let transfer: string | undefined;
+      let latestCost: number | undefined;
+      let latestAuditLog: AuditEntry[] | undefined;
+      let latestTokens: number | undefined;
+      let clarificationSet = false;
+      let awaitingClarification = false;
 
       try {
         const res = await fetch(`${API}${endpoint}`, {
@@ -52,13 +62,7 @@ export function useAgentStream() {
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let streamingText = "";
-        let author = "";
-        let toolCalls: FunctionCallPart[] = [];
-        let transfer: string | undefined;
-        let latestCost: number | undefined;
-        let latestAuditLog: AuditEntry[] | undefined;
-        let latestTokens: number | undefined;
+        let doneSignal = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -80,26 +84,32 @@ export function useAgentStream() {
               continue;
             }
 
-            if (event.type === "done") break;
+            if (event.type === "done") {
+              doneSignal = true;
+              break;
+            }
 
-            // Track which agent is responding
+            // Track author
             if (event.author) author = event.author;
 
-            // Agent transfer badge
-            if (event.transfer_to_agent) {
+            // Capture transfer once — first transfer_to_agent event only
+            if (event.transfer_to_agent && !transfer) {
               transfer = event.transfer_to_agent;
             }
 
-            // Tool calls — only on non-partial events to avoid duplicates
-            if (event.parts) {
+            // Collect tool calls from ALL events — deduplicate by id
+            if (event.parts && !event.partial) {
               for (const part of event.parts) {
-                if (part.type === "function_call" && !event.partial) {
-                  toolCalls = [...toolCalls, part];
+                if (part.type === "function_call") {
+                  const alreadyExists = toolCalls.some((t) => t.id === part.id);
+                  if (!alreadyExists) {
+                    toolCalls = [...toolCalls, part];
+                  }
                 }
               }
             }
 
-            // State delta — cost, audit log, clarification
+            // State delta
             if (event.state_delta) {
               if (event.state_delta.estimated_cost_usd !== undefined) {
                 latestCost = event.state_delta.estimated_cost_usd;
@@ -107,17 +117,28 @@ export function useAgentStream() {
               if (event.state_delta.audit_log) {
                 latestAuditLog = event.state_delta.audit_log;
               }
-              if (event.state_delta.clarification_question) {
+              // Set clarification only once per stream turn
+              if (
+                event.state_delta.clarification_question &&
+                !clarificationSet
+              ) {
                 setPendingClarification(
                   event.state_delta.clarification_question,
                 );
+                clarificationSet = true;
               }
+              // Track awaiting_clarification to hide text bubble
+              if (event.state_delta.awaiting_clarification === true) {
+                awaitingClarification = true;
+              }
+              // Per-turn tokens — subtract baseline
               if (event.state_delta.total_tokens !== undefined) {
-                latestTokens = event.state_delta.total_tokens;
+                latestTokens =
+                  event.state_delta.total_tokens - prevTotalTokensRef.current;
               }
             }
 
-            // Partial text — update streaming bubble word by word
+            // Partial text — typewriter effect
             if (event.parts && event.partial) {
               for (const part of event.parts) {
                 if (part.type === "text") {
@@ -137,10 +158,11 @@ export function useAgentStream() {
               }
             }
 
-            // Final event — settle the bubble with complete data
+            // Final event — settle bubble with complete data
             if (event.is_final && !event.partial && event.parts) {
               for (const part of event.parts) {
                 if (part.type === "text") {
+                  streamingText = part.text;
                   upsertMessage({
                     id: agentMsgId,
                     role: "agent",
@@ -152,20 +174,38 @@ export function useAgentStream() {
                     costUsd: latestCost,
                     totalTokens: latestTokens,
                     auditLog: latestAuditLog,
+                    awaitingClarification,
                   });
                 }
               }
             }
           }
+          if (doneSignal === true) {
+            break;
+          }
         }
       } finally {
         setIsStreaming(false);
         streamingIdRef.current = null;
-        // Ensure bubble is settled even if stream ended without is_final
+
+        // Update token baseline for next turn
+        if (latestTokens !== undefined) {
+          prevTotalTokensRef.current += latestTokens;
+        }
+
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === agentMsgId ? { ...m, isStreaming: false } : m,
-          ),
+          prev.map((m) => {
+            if (m.id !== agentMsgId) return m;
+            const finalText = m.text || streamingText;
+            // Remove completely empty bubbles
+            if (!finalText && !m.toolCalls?.length && !m.transfer) return m;
+            return {
+              ...m,
+              isStreaming: false,
+              text: finalText,
+              awaitingClarification,
+            };
+          }),
         );
       }
     },
@@ -178,17 +218,12 @@ export function useAgentStream() {
       upsertMessage({ id: userMsgId, role: "user", text });
       setPendingClarification(null);
 
-      // Generate session ID on first message and keep it for the whole session
       const newSessionId = sessionId ?? `session-${Date.now()}`;
       if (!sessionId) setSessionId(newSessionId);
 
       await processStream(
         "/chat/stream",
-        {
-          message: text,
-          user_id: userId,
-          session_id: newSessionId,
-        },
+        { message: text, user_id: userId, session_id: newSessionId },
         userMsgId,
       );
     },
@@ -199,8 +234,18 @@ export function useAgentStream() {
     async (answer: string, userId = "user-1") => {
       if (!sessionId) return;
       const userMsgId = `user-clarify-${Date.now()}`;
-      upsertMessage({ id: userMsgId, role: "user", text: answer });
-      setPendingClarification(null);
+
+      // Capture BEFORE clearing — will be null after setPendingClarification(null)
+      const context = pendingClarification ?? undefined;
+
+      upsertMessage({
+        id: userMsgId,
+        role: "user",
+        text: answer,
+        clarificationContext: context,
+      });
+
+      setPendingClarification(null); // clear AFTER upsert
 
       await processStream(
         "/chat/clarify",
@@ -213,7 +258,7 @@ export function useAgentStream() {
         userMsgId,
       );
     },
-    [sessionId, processStream, upsertMessage],
+    [sessionId, pendingClarification, processStream, upsertMessage],
   );
 
   return {

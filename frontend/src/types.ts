@@ -47,6 +47,7 @@ export interface AgentEvent {
   transfer_to_agent?: string;
   type?: "done";
 }
+
 export type MessageRole = "user" | "agent";
 
 export interface ChatMessage {
@@ -57,8 +58,9 @@ export interface ChatMessage {
   isStreaming?: boolean;
   toolCalls?: FunctionCallPart[];
   transfer?: string;
-  clarificationQuestion?: string;
-  totalTokens?: number;
+  clarificationContext?: string;
+  awaitingClarification?: boolean;
   costUsd?: number;
+  totalTokens?: number;
   auditLog?: AuditEntry[];
 }
